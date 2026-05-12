@@ -53,7 +53,7 @@ SQLite database; inspect **`urls`** and **`visits`** (for example with [DB Brows
 If remote PCs do not have SQLite, collect **without** `-ExportCsv` so ZIPs contain the raw **`History`** and **`places.sqlite`** files (and optional WAL/SHM). On a machine you control:
 
 1. From [sqlite.org/download](https://www.sqlite.org/download.html), download **Precompiled binaries for Windows** (bundle that includes **`sqlite3.exe`**) and keep that executable beside **`Export-BrowserHistoryToCsv.ps1`** or on `PATH`.
-2. Extract one or more **`…_BrowserArtifacts_PartNNN.zip`** files into a folder so you see paths such as **`Users\<profile>\Edge\Default\History`**.
+2. Extract **every** **`…_PartNNN.zip`** into the **same** folder (they split files across archives; together they rebuild the tree under **`Users\…`**).
 3. Run:
 
 ```powershell
