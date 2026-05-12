@@ -7,7 +7,8 @@
   gathers Chromium-family History (+wal/shm), Firefox places.sqlite (+wal/shm), plus
   lightweight extras (Bookmarks, Preferences). Output: C:\Temp\<yyyy-MM-dd_HHmmss>\
   One or more ZIP parts (<computer>_BrowserArtifacts_PartNNN.zip), each holding at most
-  -MaxFilesPerZip files (paths inside archives mirror the staging layout).
+  -MaxFilesPerZip files (paths inside archives mirror the staging layout). Use -ExportCsv to
+  emit history tables as CSV via sqlite3.exe and drop copied SQLite history databases from staging.
 
   Note: If a browser is open, SQLite files may be locked and copy can fail—close
   browsers on the endpoint first when possible, or collect again after a reboot.
@@ -24,6 +25,14 @@
 .PARAMETER KeepUncompressed
   Keep the staging folder after creating ZIPs (default: staging folder is removed).
 
+.PARAMETER ExportCsv
+  After staging copies, export browsing history from SQLite files to CSV using sqlite3.exe,
+  then remove those SQLite files from staging (WebCache and non-history extras are unchanged).
+  Requires sqlite3 on PATH or -Sqlite3Path.
+
+.PARAMETER Sqlite3Path
+  Full path to sqlite3.exe when it is not on PATH.
+
 .EXAMPLE
   powershell.exe -ExecutionPolicy Bypass -File .\Collect-BrowserArtifacts.ps1
 #>
@@ -33,7 +42,9 @@ param(
     [string]$OutputRoot = 'C:\Temp',
     [switch]$IncludeExtras,
     [ValidateRange(1, 9999)][int]$MaxFilesPerZip = 10,
-    [switch]$KeepUncompressed
+    [switch]$KeepUncompressed,
+    [switch]$ExportCsv,
+    [string]$Sqlite3Path = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -286,6 +297,141 @@ function Copy-WebCacheFolder {
     }
 }
 
+function Resolve-Sqlite3Exe {
+    param([string]$Sqlite3Path)
+    if (-not [string]::IsNullOrWhiteSpace($Sqlite3Path) -and (Test-FileExists $Sqlite3Path)) {
+        return [System.IO.Path]::GetFullPath($Sqlite3Path)
+    }
+    $cmd = Get-Command sqlite3.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -and (Test-FileExists $cmd.Source)) {
+        return $cmd.Source
+    }
+    return $null
+}
+
+function Test-SqliteHasTable {
+    param(
+        [Parameter(Mandatory)][string]$Sqlite3Exe,
+        [Parameter(Mandatory)][string]$DbPath,
+        [Parameter(Mandatory)][string]$Table
+    )
+    $sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$Table'"
+    $rows = & $Sqlite3Exe -readonly $DbPath $sql 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $last = ($rows | Select-Object -Last 1)
+    try { return ([int][string]$last.Trim()) -gt 0 } catch { return $false }
+}
+
+function Invoke-SqliteQueryToCsvFile {
+    param(
+        [Parameter(Mandatory)][string]$Sqlite3Exe,
+        [Parameter(Mandatory)][string]$DbPath,
+        [Parameter(Mandatory)][string]$Query,
+        [Parameter(Mandatory)][string]$OutCsv
+    )
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('sqlite3_stderr_{0}.txt' -f ([guid]::NewGuid().ToString('N')))
+    try {
+        if (Test-FileExists $OutCsv) {
+            Remove-Item -LiteralPath $OutCsv -Force -ErrorAction Stop
+        }
+        $q = $Query.Trim().TrimEnd(';')
+
+        & $Sqlite3Exe -readonly -bail -header -csv $DbPath $q 2>$stderrPath |
+            Out-File -LiteralPath $OutCsv -Encoding utf8
+
+        if ($LASTEXITCODE -ne 0) {
+            $err = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+            throw "sqlite3 exit $LASTEXITCODE $err"
+        }
+        if (-not (Test-FileExists $OutCsv)) {
+            throw 'sqlite3 produced no output file'
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Export-StagedHistorySqliteToCsv {
+    param(
+        [Parameter(Mandatory)][string]$StageRoot,
+        [Parameter(Mandatory)][string]$Sqlite3Exe
+    )
+    if (-not (Test-DirExists $StageRoot)) { return }
+
+    $histories = @(Get-ChildItem -LiteralPath $StageRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'History' })
+
+    foreach ($hf in $histories) {
+        $dir = $hf.DirectoryName
+        $dbPath = $hf.FullName
+        $urlsOk = $false
+        try {
+            if (Test-SqliteHasTable -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Table 'urls') {
+                $outUrls = Join-Path $dir 'History_urls.csv'
+                Invoke-SqliteQueryToCsvFile -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Query 'SELECT * FROM urls' -OutCsv $outUrls
+                Write-Host "CSV OK  History_urls -> $outUrls"
+                $urlsOk = $true
+            }
+            if (Test-SqliteHasTable -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Table 'visits') {
+                $outVisits = Join-Path $dir 'History_visits.csv'
+                Invoke-SqliteQueryToCsvFile -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Query 'SELECT * FROM visits' -OutCsv $outVisits
+                Write-Host "CSV OK  History_visits -> $outVisits"
+            }
+        }
+        catch {
+            Write-Warning "CSV FAIL Chromium History under $dir :: $($_.Exception.Message)"
+            continue
+        }
+
+        if ($urlsOk) {
+            foreach ($suffix in @('', '-wal', '-shm', '-journal')) {
+                $p = "${dbPath}${suffix}"
+                if (Test-FileExists $p) {
+                    Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Host "CSV: removed staged Chromium History DB files under $dir"
+        }
+    }
+
+    $placesFiles = @(Get-ChildItem -LiteralPath $StageRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'places.sqlite' })
+
+    foreach ($pf in $placesFiles) {
+        $dir = $pf.DirectoryName
+        $dbPath = $pf.FullName
+        $placesOk = $false
+        try {
+            if (Test-SqliteHasTable -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Table 'moz_places') {
+                $outPl = Join-Path $dir 'places_moz_places.csv'
+                Invoke-SqliteQueryToCsvFile -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Query 'SELECT * FROM moz_places' -OutCsv $outPl
+                Write-Host "CSV OK  places_moz_places -> $outPl"
+                $placesOk = $true
+            }
+            if (Test-SqliteHasTable -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Table 'moz_historyvisits') {
+                $outVis = Join-Path $dir 'places_moz_historyvisits.csv'
+                Invoke-SqliteQueryToCsvFile -Sqlite3Exe $Sqlite3Exe -DbPath $dbPath -Query 'SELECT * FROM moz_historyvisits' -OutCsv $outVis
+                Write-Host "CSV OK  places_moz_historyvisits -> $outVis"
+            }
+        }
+        catch {
+            Write-Warning "CSV FAIL Firefox places.sqlite under $dir :: $($_.Exception.Message)"
+            continue
+        }
+
+        if ($placesOk) {
+            foreach ($name in @('places.sqlite', 'places.sqlite-wal', 'places.sqlite-shm')) {
+                $p = Join-Path $dir $name
+                if (Test-FileExists $p) {
+                    Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Host "CSV: removed staged Firefox places.sqlite DB files under $dir"
+        }
+    }
+}
+
 # --- main ---
 Ensure-Dir $OutputRoot
 Ensure-Dir $destRoot
@@ -298,6 +444,8 @@ Computer:        $computer
 User context:    $env:USERNAME ($env:USERDOMAIN\$env:USERNAME)
 IncludeExtras:   $IncludeExtras
 MaxFilesPerZip:  $MaxFilesPerZip
+ExportCsv:       $ExportCsv
+Sqlite3Path:     $(if ([string]::IsNullOrWhiteSpace($Sqlite3Path)) { '(PATH)' } else { $Sqlite3Path })
 "@ | Set-Content -LiteralPath $metaPath -Encoding UTF8
 
 Write-Host "Destination: $destRoot"
@@ -332,6 +480,17 @@ foreach ($ud in $userDirs) {
 }
 
 $stageRoot = Join-Path $destRoot $computer
+
+if ($ExportCsv) {
+    $sqliteExe = Resolve-Sqlite3Exe -Sqlite3Path $Sqlite3Path
+    if (-not $sqliteExe) {
+        Write-Warning 'ExportCsv: sqlite3.exe not found (install SQLite tools, add to PATH, or pass -Sqlite3Path). Staging keeps SQLite databases.'
+    }
+    else {
+        Export-StagedHistorySqliteToCsv -StageRoot $stageRoot -Sqlite3Exe $sqliteExe
+    }
+}
+
 try {
     Compress-ToMultipartZips `
         -SourceRoot $stageRoot `

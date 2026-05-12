@@ -7,6 +7,7 @@ PowerShell collection script for **offline browser artifact analysis** (history 
 - Windows PowerShell 5.1 or PowerShell 7+
 - Sufficient rights to read other users’ profiles when running elevated / as SYSTEM
 - **Browsers closed** on the target when possible—SQLite files may be locked while open
+- **`sqlite3.exe`** ([SQLite command-line tools](https://www.sqlite.org/download.html)) on `%PATH%`, or pass **`-Sqlite3Path`**, when using **`-ExportCsv`**
 
 ## Legal / policy
 
@@ -26,13 +27,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Collect-BrowserArtifac
 | `-IncludeExtras` | Also copy Chromium bookmarks/preferences/top sites/favicons/login & web data metadata; Firefox cookies/form history/permissions. |
 | `-MaxFilesPerZip` | Maximum files per ZIP part (default: `10`). |
 | `-KeepUncompressed` | Keep the staging folder after ZIP creation. |
+| `-ExportCsv` | Export Chromium **`urls`** / **`visits`** and Firefox **`moz_places`** / **`moz_historyvisits`** from staged SQLite copies to CSV, then remove those SQLite files before ZIP. **WebCache** and non-history extras are unchanged (still copied as-is). Requires **`sqlite3.exe`**. |
+| `-Sqlite3Path` | Full path to `sqlite3.exe` when it is not on `PATH`. |
 
 ### Output layout
 
 After a successful run, under `C:\Temp\<yyyy-MM-dd_HHmmss>\`:
 
 - `<COMPUTERNAME>_BrowserArtifacts_Part001.zip`, `Part002.zip`, …  
-  Paths inside each ZIP mirror the staging tree (for example `Users\<profile>\Edge\Default\History`).
+  Paths inside each ZIP mirror the staging tree (for example `Users\<profile>\Edge\Default\History_urls.csv` when `-ExportCsv` was used, otherwise SQLite `History` files).
 - If ZIP fails, the uncompressed staging tree may remain for troubleshooting.
 
 ### Artifacts collected
@@ -53,6 +56,12 @@ Replace the repo URL if you fork or rename it.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p"
+```
+
+**With CSV export (requires `sqlite3.exe` on PATH or `-Sqlite3Path`):**
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p -ExportCsv"
 ```
 
 **Same with extras (larger collection):**
