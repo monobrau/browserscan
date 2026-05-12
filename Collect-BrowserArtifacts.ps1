@@ -33,6 +33,12 @@
 .PARAMETER Sqlite3Path
   Full path to sqlite3.exe when it is not on PATH.
 
+.PARAMETER IncludeRecoveryArtifacts
+  Collect extra artifacts that may survive or complement cleared History: Chromium session/tab
+  restore files, Media History, Visited Links, Network Action Predictor; Firefox session store
+  snapshots and prefs.js; Windows Timeline ActivitiesCache (if present); and browser-related
+  Prefetch files (requires read access to %SystemRoot%\Prefetch).
+
 .EXAMPLE
   powershell.exe -ExecutionPolicy Bypass -File .\Collect-BrowserArtifacts.ps1
 #>
@@ -41,6 +47,7 @@
 param(
     [string]$OutputRoot = 'C:\Temp',
     [switch]$IncludeExtras,
+    [switch]$IncludeRecoveryArtifacts,
     [ValidateRange(1, 9999)][int]$MaxFilesPerZip = 10,
     [switch]$KeepUncompressed,
     [switch]$ExportCsv,
@@ -133,6 +140,23 @@ function Copy-ChromiumProfileArtifacts {
                 Copy-Artifact -SourcePath $src -DestPath (Join-Path $baseDest $x.Dest) -LogLabel "$BrowserLabel\$($prof.Name)\$($x.Name)"
             }
         }
+
+        if ($IncludeRecoveryArtifacts) {
+            foreach ($n in @('Current Session', 'Last Session', 'Current Tabs', 'Last Tabs', 'Visited Links')) {
+                $src = Join-Path $prof.FullName $n
+                Copy-Artifact -SourcePath $src -DestPath (Join-Path $baseDest $n) -LogLabel "$BrowserLabel\$($prof.Name)\$n"
+            }
+
+            $napBase = Join-Path $prof.FullName 'Network Action Predictor'
+            foreach ($suffix in @('', '-wal', '-shm', '-journal')) {
+                Copy-Artifact -SourcePath "$napBase$suffix" -DestPath (Join-Path $baseDest "Network Action Predictor$suffix") -LogLabel "$BrowserLabel\$($prof.Name)\Network Action Predictor$suffix"
+            }
+
+            $mediaBase = Join-Path $prof.FullName 'Media History'
+            foreach ($suffix in @('', '-wal', '-shm', '-journal')) {
+                Copy-Artifact -SourcePath "$mediaBase$suffix" -DestPath (Join-Path $baseDest "Media History$suffix") -LogLabel "$BrowserLabel\$($prof.Name)\Media History$suffix"
+            }
+        }
     }
 }
 
@@ -184,6 +208,24 @@ function Copy-FirefoxArtifacts {
         if ($IncludeExtras) {
             foreach ($name in @('cookies.sqlite', 'cookies.sqlite-wal', 'cookies.sqlite-shm', 'formhistory.sqlite', 'permissions.sqlite')) {
                 Copy-Artifact -SourcePath (Join-Path $profPath $name) -DestPath (Join-Path $destDir $name) -LogLabel "Firefox\$leaf\$name"
+            }
+        }
+
+        if ($IncludeRecoveryArtifacts) {
+            Copy-Artifact -SourcePath (Join-Path $profPath 'sessionstore.jsonlz4') -DestPath (Join-Path $destDir 'sessionstore.jsonlz4') -LogLabel "Firefox\$leaf\sessionstore.jsonlz4"
+            Copy-Artifact -SourcePath (Join-Path $profPath 'prefs.js') -DestPath (Join-Path $destDir 'prefs.js') -LogLabel "Firefox\$leaf\prefs.js"
+
+            $sbSrc = Join-Path $profPath 'sessionstore-backups'
+            if (Test-DirExists $sbSrc) {
+                $sbDest = Join-Path $destDir 'sessionstore-backups'
+                Ensure-Dir $sbDest
+                try {
+                    robocopy $sbSrc $sbDest /COPY:DAT /R:2 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
+                    Write-Host "OK  Firefox\$leaf\sessionstore-backups (robocopy)"
+                }
+                catch {
+                    Write-Warning "FAIL Firefox\$leaf\sessionstore-backups :: $($_.Exception.Message)"
+                }
             }
         }
     }
@@ -277,6 +319,65 @@ function Compress-ToMultipartZips {
         catch {
             Write-Warning "ZIP: could not remove staging folder: $($_.Exception.Message)"
         }
+    }
+}
+
+function Copy-BrowserPrefetchHints {
+    param(
+        [Parameter(Mandatory)][string]$UserFolderName
+    )
+    if (-not $IncludeRecoveryArtifacts) { return }
+
+    $pfRoot = Join-Path $env:SystemRoot 'Prefetch'
+    if (-not (Test-DirExists $pfRoot)) { return }
+
+    $dest = Join-Path (Join-Path (Join-Path $destRoot $computer) "Users\$UserFolderName") '_Prefetch_Browsers'
+    Ensure-Dir $dest
+
+    $filters = @(
+        'CHROME.EXE-*.pf',
+        'CHROMIUM.EXE-*.pf',
+        'MSEDGE.EXE-*.pf',
+        'MICROSOFTEDGE.EXE-*.pf',
+        'BRAVE.EXE-*.pf',
+        'FIREFOX.EXE-*.pf',
+        'OPERA.EXE-*.pf',
+        'VIVALDI.EXE-*.pf',
+        'YANDEX_BROWSER.EXE-*.pf'
+    )
+
+    foreach ($pat in $filters) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $pfRoot -File -Filter $pat -ErrorAction SilentlyContinue)) {
+            Copy-Artifact -SourcePath $f.FullName -DestPath (Join-Path $dest $f.Name) -LogLabel "Prefetch\$($f.Name)"
+        }
+    }
+}
+
+function Copy-ActivitiesCacheArtifact {
+    param(
+        [Parameter(Mandatory)][string]$UserFolderName,
+        [Parameter(Mandatory)][string]$UserProfileFullPath
+    )
+    if (-not $IncludeRecoveryArtifacts) { return }
+
+    $cdp = Join-Path $UserProfileFullPath 'AppData\Local\ConnectedDevicesPlatform'
+    if (-not (Test-DirExists $cdp)) { return }
+
+    $lDir = Join-Path $cdp "L.$UserFolderName"
+    if (-not (Test-DirExists $lDir)) {
+        $first = Get-ChildItem -LiteralPath $cdp -Directory -Filter 'L.*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^L\.' } |
+            Select-Object -First 1
+        if (-not $first) { return }
+        $lDir = $first.FullName
+    }
+
+    $destDir = Join-Path (Join-Path (Join-Path $destRoot $computer) "Users\$UserFolderName") 'WindowsTimeline_ActivitiesCache'
+    Ensure-Dir $destDir
+
+    foreach ($suffix in @('', '-wal', '-shm')) {
+        $src = Join-Path $lDir "ActivitiesCache.db$suffix"
+        Copy-Artifact -SourcePath $src -DestPath (Join-Path $destDir "ActivitiesCache.db$suffix") -LogLabel "ActivitiesCache.db$suffix"
     }
 }
 
@@ -449,8 +550,9 @@ Collected (UTC): $(([datetime]::UtcNow).ToString('o'))
 Local time:      $(Get-Date -Format 'o')
 Computer:        $computer
 User context:    $env:USERNAME ($env:USERDOMAIN\$env:USERNAME)
-IncludeExtras:   $IncludeExtras
-MaxFilesPerZip:  $MaxFilesPerZip
+IncludeExtras:           $IncludeExtras
+IncludeRecoveryArtifacts: $IncludeRecoveryArtifacts
+MaxFilesPerZip:           $MaxFilesPerZip
 ExportCsv:       $ExportCsv
 Sqlite3Path:     $(if ([string]::IsNullOrWhiteSpace($Sqlite3Path)) { '(PATH)' } else { $Sqlite3Path })
 "@ | Set-Content -LiteralPath $metaPath -Encoding UTF8
@@ -484,6 +586,8 @@ foreach ($ud in $userDirs) {
 
     Copy-FirefoxArtifacts -UserFolderName $uname
     Copy-WebCacheFolder -UserFolderName $uname
+    Copy-BrowserPrefetchHints -UserFolderName $uname
+    Copy-ActivitiesCacheArtifact -UserFolderName $uname -UserProfileFullPath $local
 }
 
 $stageRoot = Join-Path $destRoot $computer

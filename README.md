@@ -25,6 +25,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Collect-BrowserArtifac
 |-----------|-------------|
 | `-OutputRoot` | Parent folder for the dated run folder (default: `C:\Temp`; folder is created if missing). |
 | `-IncludeExtras` | Also copy Chromium bookmarks/preferences/top sites/favicons/login & web data metadata; Firefox cookies/form history/permissions. |
+| `-IncludeRecoveryArtifacts` | Extra hints when **`History`** / **`places`** may be cleared: Chromium session/tab restore blobs (**Current Session**, **Last Session**, **Current Tabs**, **Last Tabs**), **Visited Links**, **Media History** (+ WAL when present), **Network Action Predictor**; Firefox **sessionstore.jsonlz4**, **sessionstore-backups**, **prefs.js**; Windows Timeline **`ActivitiesCache.db`** (+ WAL/SHM); matching **`%SystemRoot%\Prefetch`** entries for common browsers (if readable). |
 | `-MaxFilesPerZip` | Maximum files per ZIP part (default: `10`). |
 | `-KeepUncompressed` | Keep the staging folder after ZIP creation. |
 | `-ExportCsv` | Export Chromium **`urls`** / **`visits`** and Firefox **`moz_places`** / **`moz_historyvisits`** from staged SQLite copies to CSV, then remove those SQLite files before ZIP (unless conversion fails). **WebCache** and non-history extras stay as copied files. Requires **`sqlite3.exe`** (beside the script, on `PATH`, or **`-Sqlite3Path`**). |
@@ -43,6 +44,11 @@ After a successful run, under `C:\Temp\<yyyy-MM-dd_HHmmss>\`:
 - **Chromium family** (per profile with `History`): Chrome, Edge, Brave, Vivaldi, Yandex, Chromium, Opera / Opera GX — `History` plus `-wal`, `-shm`, `-journal` when present.
 - **Firefox**: `places.sqlite` (+ wal/shm) per profile from `profiles.ini`.
 - **Legacy IE / old Edge**: `%LocalAppData%\Microsoft\Windows\WebCache` copied via robocopy into `WebCache_ESE` before ZIP.
+- **`-IncludeRecoveryArtifacts`**: session/tab restore files, **Visited Links**, **Media History**, autocomplete predictor DBs; Firefox session snapshots; **ActivitiesCache** (Timeline); browser **Prefetch** stubs — see parameter table.
+
+### When users clear browser history
+
+Built-in “clear browsing data” often removes **`History`** / **`visits`** but **does not always wipe** session restore blobs, **Visited Links**, **Network Action Predictor**, **Media History**, cookies/autofill (**`-IncludeExtras`**), or OS-side traces. Useful **additional** sources this repo does **not** automate (collect manually / other tools): **Jump Lists** (`AutomaticDestinations-ms`), **SRUM** (`SOFTWARE\Microsoft\Windows NT\CurrentVersion\SRUM`), **DNS** resolver caches / logs, proxy/firewall logs, enterprise browsing extensions, EDR, Volume Shadow Copies / filesystem carving for deleted SQLite pages.
 
 ### Analyzing Chromium `History`
 
