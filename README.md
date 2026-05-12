@@ -7,7 +7,7 @@ PowerShell collection script for **offline browser artifact analysis** (history 
 - Windows PowerShell 5.1 or PowerShell 7+
 - Sufficient rights to read other users’ profiles when running elevated / as SYSTEM
 - **Browsers closed** on the target when possible—SQLite files may be locked while open
-- **`sqlite3.exe`** ([SQLite command-line tools](https://www.sqlite.org/download.html)) on `%PATH%`, or pass **`-Sqlite3Path`**, when using **`-ExportCsv`**
+- **`sqlite3.exe`** ([SQLite command-line tools](https://www.sqlite.org/download.html)) only when you use **`-ExportCsv`** on the endpoint: put **`sqlite3.exe` in the same folder as `Collect-BrowserArtifacts.ps1`**, add it to `PATH`, or pass **`-Sqlite3Path`**. If endpoints never have SQLite, **omit `-ExportCsv`** and convert later with **`Export-BrowserHistoryToCsv.ps1`** on your analysis PC (see below).
 
 ## Legal / policy
 
@@ -27,8 +27,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Collect-BrowserArtifac
 | `-IncludeExtras` | Also copy Chromium bookmarks/preferences/top sites/favicons/login & web data metadata; Firefox cookies/form history/permissions. |
 | `-MaxFilesPerZip` | Maximum files per ZIP part (default: `10`). |
 | `-KeepUncompressed` | Keep the staging folder after ZIP creation. |
-| `-ExportCsv` | Export Chromium **`urls`** / **`visits`** and Firefox **`moz_places`** / **`moz_historyvisits`** from staged SQLite copies to CSV, then remove those SQLite files before ZIP. **WebCache** and non-history extras are unchanged (still copied as-is). Requires **`sqlite3.exe`**. |
-| `-Sqlite3Path` | Full path to `sqlite3.exe` when it is not on `PATH`. |
+| `-ExportCsv` | Export Chromium **`urls`** / **`visits`** and Firefox **`moz_places`** / **`moz_historyvisits`** from staged SQLite copies to CSV, then remove those SQLite files before ZIP (unless conversion fails). **WebCache** and non-history extras stay as copied files. Requires **`sqlite3.exe`** (beside the script, on `PATH`, or **`-Sqlite3Path`**). |
+| `-Sqlite3Path` | Full path to `sqlite3.exe` when it is not beside the script and not on `PATH`. |
 
 ### Output layout
 
@@ -47,6 +47,23 @@ After a successful run, under `C:\Temp\<yyyy-MM-dd_HHmmss>\`:
 ### Analyzing Chromium `History`
 
 SQLite database; inspect **`urls`** and **`visits`** (for example with [DB Browser for SQLite](https://sqlitebrowser.org/)).
+
+## Converting databases to CSV later (no SQLite on the endpoint)
+
+If remote PCs do not have SQLite, collect **without** `-ExportCsv` so ZIPs contain the raw **`History`** and **`places.sqlite`** files (and optional WAL/SHM). On a machine you control:
+
+1. From [sqlite.org/download](https://www.sqlite.org/download.html), download **Precompiled binaries for Windows** (bundle that includes **`sqlite3.exe`**) and keep that executable beside **`Export-BrowserHistoryToCsv.ps1`** or on `PATH`.
+2. Extract one or more **`…_BrowserArtifacts_PartNNN.zip`** files into a folder so you see paths such as **`Users\<profile>\Edge\Default\History`**.
+3. Run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Export-BrowserHistoryToCsv.ps1 -InputPath 'D:\path\to\extracted\folder'
+```
+
+- **`InputPath`** can be the extracted archive root (recursive scan), or a single file **`History`** or **`places.sqlite`**.
+- CSVs are written **next to each database**. Original DB files are **kept** unless you pass **`-DeleteOriginalSqlite`**.
+
+Portable toolkit idea for ScreenConnect: copy **`Collect-BrowserArtifacts.ps1`** + **`sqlite3.exe`** into one folder so `-ExportCsv` works without a machine-wide SQLite install.
 
 ## One-liner: download from GitHub and run
 

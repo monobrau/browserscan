@@ -28,7 +28,7 @@
 .PARAMETER ExportCsv
   After staging copies, export browsing history from SQLite files to CSV using sqlite3.exe,
   then remove those SQLite files from staging (WebCache and non-history extras are unchanged).
-  Requires sqlite3 on PATH or -Sqlite3Path.
+  Requires sqlite3.exe beside this script, on PATH, or -Sqlite3Path.
 
 .PARAMETER Sqlite3Path
   Full path to sqlite3.exe when it is not on PATH.
@@ -302,6 +302,12 @@ function Resolve-Sqlite3Exe {
     if (-not [string]::IsNullOrWhiteSpace($Sqlite3Path) -and (Test-FileExists $Sqlite3Path)) {
         return [System.IO.Path]::GetFullPath($Sqlite3Path)
     }
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        $bundled = Join-Path (Split-Path -Parent $PSCommandPath) 'sqlite3.exe'
+        if (Test-FileExists $bundled) {
+            return [System.IO.Path]::GetFullPath($bundled)
+        }
+    }
     $cmd = Get-Command sqlite3.exe -ErrorAction SilentlyContinue
     if ($cmd -and $cmd.Source -and (Test-FileExists $cmd.Source)) {
         return $cmd.Source
@@ -355,7 +361,8 @@ function Invoke-SqliteQueryToCsvFile {
 function Export-StagedHistorySqliteToCsv {
     param(
         [Parameter(Mandatory)][string]$StageRoot,
-        [Parameter(Mandatory)][string]$Sqlite3Exe
+        [Parameter(Mandatory)][string]$Sqlite3Exe,
+        [switch]$DeleteOriginalSqlite
     )
     if (-not (Test-DirExists $StageRoot)) { return }
 
@@ -384,7 +391,7 @@ function Export-StagedHistorySqliteToCsv {
             continue
         }
 
-        if ($urlsOk) {
+        if ($urlsOk -and $DeleteOriginalSqlite) {
             foreach ($suffix in @('', '-wal', '-shm', '-journal')) {
                 $p = "${dbPath}${suffix}"
                 if (Test-FileExists $p) {
@@ -420,7 +427,7 @@ function Export-StagedHistorySqliteToCsv {
             continue
         }
 
-        if ($placesOk) {
+        if ($placesOk -and $DeleteOriginalSqlite) {
             foreach ($name in @('places.sqlite', 'places.sqlite-wal', 'places.sqlite-shm')) {
                 $p = Join-Path $dir $name
                 if (Test-FileExists $p) {
@@ -484,10 +491,10 @@ $stageRoot = Join-Path $destRoot $computer
 if ($ExportCsv) {
     $sqliteExe = Resolve-Sqlite3Exe -Sqlite3Path $Sqlite3Path
     if (-not $sqliteExe) {
-        Write-Warning 'ExportCsv: sqlite3.exe not found (install SQLite tools, add to PATH, or pass -Sqlite3Path). Staging keeps SQLite databases.'
+        Write-Warning 'ExportCsv: sqlite3.exe not found. Drop sqlite3.exe next to this script, add SQLite tools to PATH, or pass -Sqlite3Path. Staging keeps SQLite databases.'
     }
     else {
-        Export-StagedHistorySqliteToCsv -StageRoot $stageRoot -Sqlite3Exe $sqliteExe
+        Export-StagedHistorySqliteToCsv -StageRoot $stageRoot -Sqlite3Exe $sqliteExe -DeleteOriginalSqlite
     }
 }
 
