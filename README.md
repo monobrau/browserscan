@@ -52,22 +52,42 @@ SQLite database; inspect **`urls`** and **`visits`** (for example with [DB Brows
 
 Replace the repo URL if you fork or rename it.
 
+**Important:** If you paste the command into **PowerShell**, do **not** wrap `-Command` in **double** quotes with `$variables` inside—the **parent** session expands `$u`, `$p`, and `$env:TEMP` before the child starts, so `-Uri` / `-OutFile` become empty and you get `Missing expression after '&'`. Use one of the fixes below.
+
+### Recommended (works when pasted into PowerShell)
+
+Put `-Command` in **single quotes**. Inside that string, use **doubled** single quotes (`''`) for literal single quotes:
+
 **Download to `%TEMP%` then execute:**
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$u=''https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1''; $p=Join-Path $env:TEMP ''Collect-BrowserArtifacts.ps1''; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p'
 ```
 
 **With CSV export (requires `sqlite3.exe` on PATH or `-Sqlite3Path`):**
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p -ExportCsv"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$u=''https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1''; $p=Join-Path $env:TEMP ''Collect-BrowserArtifacts.ps1''; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p -ExportCsv'
 ```
 
 **Same with extras (larger collection):**
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p -IncludeExtras"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$u=''https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1''; $p=Join-Path $env:TEMP ''Collect-BrowserArtifacts.ps1''; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p -IncludeExtras'
+```
+
+### From Command Prompt (`cmd.exe`)
+
+Double quotes are usually fine because `cmd` does not expand PowerShell variables:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; $p=Join-Path $env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri $u -OutFile $p -UseBasicParsing; & $p"
+```
+
+### Alternative in PowerShell only (escape `$` for the parent)
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "`$u='https://raw.githubusercontent.com/monobrau/browserscan/main/Collect-BrowserArtifacts.ps1'; `$p=Join-Path `$env:TEMP 'Collect-BrowserArtifacts.ps1'; Invoke-WebRequest -Uri `$u -OutFile `$p -UseBasicParsing; & `$p"
 ```
 
 **Optional:** pin to a commit SHA instead of `main` in the raw URL for supply-chain stability.
